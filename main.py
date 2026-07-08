@@ -1,7 +1,7 @@
 # requirements: pip install -U discord.py
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
 import os
 import asyncio
 from dotenv import load_dotenv
@@ -15,16 +15,16 @@ intents.guilds = True
 intents.members = True
 intents.messages = True
 intents.dm_messages = True
-intents.message_content = True  # required to read message content
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 ticket_counter = 1
 
-# map channel_id -> ticket metadata
-open_tickets = {}  # {channel_id: {"user_id": int, "last_user_message": datetime, "inactivity_task": task}}
+# channel_id -> {"user_id": int, "last_user_message": datetime or None, "inactivity_task": Task}
+open_tickets = {}
 
-# --- Embeds builders ---
+# Embeds
 def menu_embed():
     e = discord.Embed(title="UGT Tickets", color=discord.Color.blurple())
     e.add_field(name="Ultimate Gorilla Tag", value="\u200b", inline=False)
@@ -41,23 +41,28 @@ def menu_embed():
     return e
 
 def dm_start_embed():
-    e = discord.Embed(title="UGT Ticket", description="Thanks for choosing UGT. Your ticket has now started! All messages sent here will be forwarded to the staff team.", color=discord.Color.blue())
-    return e
+    return discord.Embed(
+        title="UGT Ticket",
+        description="Thanks for choosing COMP. Your ticket has now started! All messages sent here will be forwarded to the staff team.",
+        color=discord.Color.blue()
+    )
 
 def dm_report_question_embed():
-    e = discord.Embed(description="Are you reporting a player or not?", color=discord.Color.red())
-    return e
+    return discord.Embed(description="Are you reporting a player or not?", color=discord.Color.red())
 
 def inactivity_warning_embed():
-    e = discord.Embed(title="Inactivity Warning", description="Please respond within 24 hours, or the ticket will be closed due to inactivity.", color=discord.Color.blue())
-    return e
+    return discord.Embed(
+        title="Inactivity Warning",
+        description="Please respond within 24 hours, or the ticket will be closed due to inactivity.",
+        color=discord.Color.blue()
+    )
 
 def ticket_closed_embed(reason: str):
     e = discord.Embed(title="Ticket Closed", color=discord.Color.red())
     e.add_field(name="Reason", value=reason)
     return e
 
-# --- Views ---
+# Views
 class TicketMenuView(discord.ui.View):
     def __init__(self, category_id: int | None):
         super().__init__(timeout=None)
@@ -68,12 +73,12 @@ class TicketMenuView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await handle_open_ticket(interaction, self.category_id)
 
-# --- Utility: create ticket channel + DM user; attach metadata + schedule inactivity monitor ---
+# Create ticket (server channel + DM flow)
 async def handle_open_ticket(interaction: discord.Interaction, category_id: int | None):
     global ticket_counter
     guild = interaction.guild
     user = interaction.user
-    # create server channel
+
     safe_name = ''.join(ch for ch in user.name.lower() if ch.isalnum())[:8]
     channel_name = f"ticket-{ticket_counter}-{safe_name}"
     ticket_counter += 1
@@ -98,40 +103,48 @@ async def handle_open_ticket(interaction: discord.Interaction, category_id: int 
         await interaction.followup.send("Failed to create ticket channel. Check bot permissions.", ephemeral=True)
         return
 
-    # send initial message in server ticket
-    server_intro = discord.Embed(title="UGT Ticket", description=f"{user.mention} opened a ticket. Staff: respond here to talk to the user.", color=discord.Color.green())
-    await new_ch.send(embed=server_intro, view=CloseTicketView())
+    # send initial message in server ticket with logo thumbnail (pfp.png)
+    server_intro = discord.Embed(
+        title="UGT Ticket",
+        description=f"{user.mention} opened a ticket. Staff: respond here to talk to the user.",
+        color=discord.Color.green()
+    )
+    pfp_path = "pfp.png"
+    try:
+        if os.path.isfile(pfp_path):
+            sent_attach = await new_ch.send(file=discord.File(pfp_path))
+            if sent_attach.attachments:
+                server_intro.set_thumbnail(url=sent_attach.attachments[-1].url)
+                await sent_attach.delete()
+        await new_ch.send(embed=server_intro)
+    except Exception:
+        await new_ch.send(embed=server_intro)
 
-    # DM user: start embed + question embed
+    # DM the user: start and question
     try:
         dm = await user.create_dm()
         await dm.send(embed=dm_start_embed())
         await dm.send(embed=dm_report_question_embed())
     except Exception:
-        # cannot DM user
         await new_ch.send("Couldn't send DM to the user. They may have DMs disabled.")
         await interaction.followup.send("Ticket created, but couldn't DM the user.", ephemeral=True)
-        # still register as open ticket
         open_tickets[new_ch.id] = {"user_id": user.id, "last_user_message": None, "inactivity_task": None}
-        await interaction.followup.send(f"Ticket created: {new_ch.mention}", ephemeral=True)
         return
 
     # register ticket and start inactivity monitor
-    open_tickets[new_ch.id] = {"user_id": user.id, "last_user_message": None, "inactivity_task": asyncio.create_task(inactivity_monitor(new_ch.id))}
+    task = asyncio.create_task(inactivity_monitor(new_ch.id))
+    open_tickets[new_ch.id] = {"user_id": user.id, "last_user_message": None, "inactivity_task": task}
     await interaction.followup.send(f"Ticket created: {new_ch.mention}", ephemeral=True)
 
-# --- Forwarding logic: DM -> server channel ; server staff -> DM ---
+# Forwarding logic
 @bot.event
 async def on_message(message: discord.Message):
-    # ignore bot messages
     if message.author.bot:
         return
 
-    # DM from user to bot
+    # DM from user -> forward to server ticket channel
     if isinstance(message.channel, discord.DMChannel):
-        # find ticket channel for this user
         user_id = message.author.id
-        # find any open ticket mapping to user_id
         ch_id = None
         for cid, meta in open_tickets.items():
             if meta["user_id"] == user_id:
@@ -139,42 +152,35 @@ async def on_message(message: discord.Message):
                 break
 
         if ch_id is None:
-            # no open ticket — optionally ignore or notify user
             await message.channel.send("You don't have an open ticket. Use the server ticket menu to open one.")
             return
 
         meta = open_tickets.get(ch_id)
         meta["last_user_message"] = discord.utils.utcnow()
-        # forward message content & attachments to server channel
+
         guild = bot.get_guild(GUILD_ID)
-        ticket_ch = guild.get_channel(ch_id)
+        ticket_ch = guild.get_channel(ch_id) if guild else None
         if not ticket_ch:
             await message.channel.send("Server ticket channel not found. It may have been closed.")
             return
 
         header = f"<@{user_id}> | {message.author.name} • {user_id}"
-        # build content: header + content
         content = message.content or ""
-        # attach attachments if present
         files = []
         for att in message.attachments:
             files.append(await att.to_file())
 
-        # send embed-like presentation: header in bold
         send_text = f"{header}\n{content}"
         await ticket_ch.send(send_text, files=files)
         return
 
-    # Message in a guild channel: check if it's a ticket channel
+    # Message in server ticket channel: if staff, forward to user's DM
     if message.guild and message.channel.id in open_tickets:
-        # staff -> forward to user; ignore user's own messages in server (they shouldn't be posting there)
         author = message.author
         meta = open_tickets[message.channel.id]
         user_id = meta["user_id"]
-        # check if author is staff (role or admin)
         is_staff = author.guild_permissions.administrator or any(r.id in STAFF_ROLE_IDS for r in author.roles)
         if is_staff:
-            # forward to user's DM, prefix "Staff Member" and append "videos are ok"
             try:
                 user = await bot.fetch_user(user_id)
                 dm = await user.create_dm()
@@ -187,47 +193,37 @@ async def on_message(message: discord.Message):
                 await dm.send(forward, files=files)
             except Exception:
                 await message.channel.send("Couldn't DM the user. They may have DMs closed.")
-        else:
-            # optionally ignore or warn non-staff
-            pass
-
-    # allow commands to process
+        # non-staff messages are ignored for forwarding
     await bot.process_commands(message)
 
-# --- Inactivity monitor: after 24h of no user message, send warning; after another 24h close ticket ---
+# Inactivity monitor: 24h warning, then 24h close
 async def inactivity_monitor(channel_id: int):
-    # Wait loop: check timestamps
     def get_meta():
         return open_tickets.get(channel_id)
-
     try:
-        # wait 24h
         await asyncio.sleep(24 * 3600)
         meta = get_meta()
         if not meta:
-            return  # ticket closed
+            return
         last = meta.get("last_user_message")
-        # if user hasn't sent anything (None) or last message older than 24h, send warning
         if last is None or (discord.utils.utcnow() - last).total_seconds() >= 24 * 3600:
-            # send warning embed to user and channel
-            guild = bot.get_guild(GUILD_ID)
-            ch = guild.get_channel(channel_id) if guild else None
-            user = await bot.fetch_user(meta["user_id"])
+            # send warning to user and channel
             try:
+                user = await bot.fetch_user(meta["user_id"])
                 await user.send(embed=inactivity_warning_embed())
             except Exception:
                 pass
+            guild = bot.get_guild(GUILD_ID)
+            ch = guild.get_channel(channel_id) if guild else None
             if ch:
                 await ch.send(embed=inactivity_warning_embed())
             # wait another 24h
             await asyncio.sleep(24 * 3600)
-            # re-check
             meta2 = get_meta()
             if not meta2:
                 return
             last2 = meta2.get("last_user_message")
             if last2 is None or (discord.utils.utcnow() - last2).total_seconds() >= 24 * 3600:
-                # close ticket for inactivity
                 ch2 = bot.get_guild(GUILD_ID).get_channel(channel_id)
                 await close_ticket_channel(ch2, reason="Inactive")
     except asyncio.CancelledError:
@@ -235,24 +231,21 @@ async def inactivity_monitor(channel_id: int):
     except Exception:
         return
 
-# --- Close ticket helper ---
+# Close ticket helper
 async def close_ticket_channel(channel: discord.TextChannel | None, reason: str = "Closed"):
     if not channel:
         return
     meta = open_tickets.pop(channel.id, None)
-    # notify user
     if meta:
         try:
             user = await bot.fetch_user(meta["user_id"])
             await user.send(embed=ticket_closed_embed(reason))
         except Exception:
             pass
-    # inform channel then delete
     try:
         await channel.send(embed=ticket_closed_embed(reason))
     except Exception:
         pass
-    # cancel inactivity task if exists
     if meta and meta.get("inactivity_task"):
         task = meta["inactivity_task"]
         if not task.done():
@@ -263,7 +256,7 @@ async def close_ticket_channel(channel: discord.TextChannel | None, reason: str 
     except Exception:
         pass
 
-# --- Slash commands ---
+# Slash command to post menu (uploads pfp.png and uses it as thumbnail)
 @tree.command(name="create_ticket", description="Post the ticket menu in a channel", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(channel="Channel to post the ticket menu in", category="Optional category to place ticket channels under")
 @app_commands.checks.has_permissions(administrator=True)
@@ -273,14 +266,13 @@ async def create_ticket(interaction: discord.Interaction, channel: discord.TextC
     pfp_path = "pfp.png"
     try:
         if os.path.isfile(pfp_path):
-            sent = await channel.send(file=discord.File(pfp_path))
+            # send file + view first so button is attached under the image, then edit to include embed with thumbnail
+            sent = await channel.send(file=discord.File(pfp_path), view=view)
             if sent.attachments:
                 embed.set_thumbnail(url=sent.attachments[-1].url)
-                await sent.delete()
-                await channel.send(embed=embed, view=view)
-            else:
-                await channel.send(embed=embed, view=view)
+            await sent.edit(embed=embed)
         else:
+            # fallback: send embed + view normally
             await channel.send(embed=embed, view=view)
         await interaction.response.send_message(f"Ticket menu posted in {channel.mention}.", ephemeral=True)
     except Exception:
@@ -293,6 +285,7 @@ async def create_ticket_error(interaction: discord.Interaction, error):
     else:
         await interaction.response.send_message("An error occurred.", ephemeral=True)
 
+# Close-ticket slash command (staff only)
 @tree.command(name="close-ticket", description="Close the ticket you are in (staff only)", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(reason="Reason for closing the ticket (optional)")
 @app_commands.checks.has_permissions(administrator=True)
