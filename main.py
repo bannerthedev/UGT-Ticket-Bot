@@ -25,39 +25,47 @@ open_tickets: dict[int, dict] = {}  # channel_id -> {"user_id": int, "last_user_
 
 # ---------------- Embeds ----------------
 def menu_embed() -> discord.Embed:
-    embed = discord.Embed(
-        title="UGT Tickets",
-        description=(
-            "**Ultimate Gorilla Tag**\n\n"
-            "A ticket gives you direct access to the staff team for reports and support. "
-            "Anything related to the game or the server, we can help with. Open one and a staff "
-            "member will be with you shortly."
-        ),
-        color=0x2F6FFF
+    # Top title in the card
+    title = "UGT Tickets"
+
+    # Small subtitle + main body
+    desc = (
+        "Comp Ultimate Gorilla Tag\n\n"
+        "A ticket gives you direct access to the staff team for reports and support. "
+        "Anything related to the game or the server, we can help with. Open one and a "
+        "staff member will be with you shortly."
     )
-    # Use full image instead of thumbnail
-    pfp_url = os.getenv("PFP_URL")
-    if pfp_url:
-        embed.set_image(url=pfp_url)
-    embed.set_footer(text="Use the button below to open a ticket.")
+
+    embed = discord.Embed(
+        title=title,
+        description=desc,
+        color=0x2F6FFF  # adjust if you want a different accent color
+    )
+
+    # Optional: small footer hint
+    embed.set_footer(text="Use the button on the right to open a ticket.")
+
     return embed
+
 
 def dm_start_embed() -> discord.Embed:
     return discord.Embed(
         title="UGT Ticket",
         description=(
-            "Thanks for choosing UGT support.\n\n"
+            "Thanks for contacting **Ultimate Gorilla Tag** support.\n\n"
             "Your ticket has now started! All messages you send here will be "
             "forwarded to the staff team."
         ),
         color=discord.Color.blue()
     )
 
+
 def dm_report_question_embed() -> discord.Embed:
     return discord.Embed(
         description="Are you reporting a player, or is this about something else?",
         color=discord.Color.red()
     )
+
 
 def inactivity_warning_embed() -> discord.Embed:
     return discord.Embed(
@@ -68,6 +76,7 @@ def inactivity_warning_embed() -> discord.Embed:
         ),
         color=discord.Color.blue()
     )
+
 
 def ticket_closed_embed(reason: str) -> discord.Embed:
     e = discord.Embed(title="Ticket Closed", color=discord.Color.red())
