@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GUILD_ID = 1194779812158525552
-# Replace these with your actual staff role IDs
 STAFF_ROLE_IDS = [1462534977035174191, 1482419022946369568, 1293678474900537384, 1411128656658436116]
 
 intents = discord.Intents.default()
@@ -26,16 +25,23 @@ open_tickets: dict[int, dict] = {}  # channel_id -> {"user_id": int, "last_user_
 
 # ---------------- Embeds ----------------
 def menu_embed() -> discord.Embed:
-    # Structure to resemble the example: big title, small subtitle, paragraph description
-    e = discord.Embed(title="UGT Tickets", color=0x2F3430)  # dark border color to match screenshot
-    # Put subtitle as small line in the description to control spacing
-    e.description = (
-        "Ultimate Gorilla Tag\n\n"
-        "A ticket gives you direct access to the staff team for reports and support.\n"
-        "Anything related to the game or the server, we can help with. Open one and\n"
-        "a staff member will be with you shortly.\n\n"
-        "Please read the Terms of Service before opening a ticket."
+    # Blue border and description shaped like the CGT example
+    e = discord.Embed(title="UGT Tickets", color=discord.Color.blue())
+    # small subtitle line under title
+    e.add_field(name="Ultimate Gorilla Tag", value="\u200b", inline=False)
+    # main paragraph block similar to CGT
+    e.add_field(
+        name="\u200b",
+        value=(
+            "A ticket gives you direct access to the staff team for reports and support.\n"
+            "Anything related to the game or the server, we can help with. Open one and\n"
+            "a staff member will be with you shortly."
+        ),
+        inline=False
     )
+    # add small spacer field to make the embed appear rectangular
+    e.add_field(name="\u200b", value="\u200b", inline=False)
+    e.set_footer(text="Please read the Terms of Service before opening a ticket.")
     return e
 
 def dm_start_embed() -> discord.Embed:
@@ -252,7 +258,7 @@ async def close_ticket_channel(channel: discord.TextChannel | None, reason: str 
     except Exception:
         pass
 
-# ---------------- create_ticket command (logo + button under image) ----------------
+# ---------------- create_ticket command (logo + button under embed) ----------------
 @tree.command(name="create_ticket", description="Post the ticket menu in a channel", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(channel="Channel to post the ticket menu in", category="Optional category to place ticket channels under")
 @app_commands.checks.has_permissions(administrator=True)
@@ -262,7 +268,7 @@ async def create_ticket(interaction: discord.Interaction, channel: discord.TextC
     embed = menu_embed()
     pfp_path = "pfp.png"
     try:
-        # If local image exists, send it with the view so button sits under it, then edit same message to include embed thumbnail
+        # If local image exists, send it with the view so button sits under the image, then edit message to include embed thumbnail
         if os.path.isfile(pfp_path):
             sent = await channel.send(file=discord.File(pfp_path), view=view)
             if sent.attachments:
