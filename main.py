@@ -1,14 +1,14 @@
 # requirements: pip install -U discord.py
+import os
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os
-import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 
 GUILD_ID = 1194779812158525552
-STAFF_ROLE_IDS = [1462534977035174191, 1482419022946369568, 129367847490053738384, 1411128656658436116]  # verify these IDs
+STAFF_ROLE_IDS = [1462534977035174191, 1482419022946369568, 129367847490053738384, 1411128656658436116]
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -19,24 +19,21 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
-ticket_counter = 1
-open_tickets = {}  # channel_id -> {"user_id": int, "last_user_message": datetime or None, "inactivity_task": Task}
 
-# ---------- EMBED BUILDERS ----------
+ticket_counter = 1
+open_tickets: dict[int, dict] = {}  # channel_id -> {"user_id": int, "last_user_message": datetime or None, "inactivity_task": Task}
+
+# --- Embeds (matching screenshot layout, with UGT / Ultimate Gorilla Tag) ---
 def menu_embed():
-    # color chosen to approximate screenshot; embed text color is client-dependent
+    # Use a dark/blurple border to approximate screenshot. Discord client chooses text color.
     e = discord.Embed(title="UGT Tickets", color=0x2F3A2F)
-    e.add_field(name="Ultimate Gorilla Tag", value="\u200b", inline=False)
-    e.add_field(
-        name="\u200b",
-        value=(
-            "A ticket gives you direct access to the staff team for reports and support.\n"
-            "Anything related to the game or the server, we can help with. Open one and\n"
-            "a staff member will be with you shortly."
-        ),
-        inline=False
+    # put the small subtitle as the first line of description to mimic placement
+    e.description = "Ultimate Gorilla Tag\n\n" + (
+        "A ticket gives you direct access to the staff team for reports and support.\n"
+        "Anything related to the game or the server, we can help with. Open one and\n"
+        "a staff member will be with you shortly.\n\n"
+        "Please read the Terms of Service before opening a ticket."
     )
-    e.set_footer(text="Please read the Terms of Service before opening a ticket.")
     return e
 
 def dm_start_embed():
@@ -61,7 +58,7 @@ def ticket_closed_embed(reason: str):
     e.add_field(name="Reason", value=reason, inline=False)
     return e
 
-# ---------- VIEW ----------
+# --- View ---
 class TicketMenuView(discord.ui.View):
     def __init__(self, category_id: int | None):
         super().__init__(timeout=None)
@@ -72,14 +69,14 @@ class TicketMenuView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await handle_open_ticket(interaction, self.category_id)
 
-# ---------- CREATE TICKET (server + DM) ----------
+# --- Create ticket: server channel + DM flow ---
 async def handle_open_ticket(interaction: discord.Interaction, category_id: int | None):
     global ticket_counter
     guild = interaction.guild
     user = interaction.user
 
-    safe = ''.join(ch for ch in user.name.lower() if ch.isalnum())[:8]
-    channel_name = f"ticket-{ticket_counter}-{safe}"
+    safe_name = ''.join(ch for ch in user.name.lower() if ch.isalnum())[:8]
+    channel_name = f"ticket-{ticket_counter}-{safe_name}"
     ticket_counter += 1
 
     overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
@@ -102,14 +99,13 @@ async def handle_open_ticket(interaction: discord.Interaction, category_id: int 
         await interaction.followup.send("Failed to create ticket channel. Check bot permissions.", ephemeral=True)
         return
 
-    # server embed (thumbnail from env or local file)
     server_intro = discord.Embed(
         title="UGT Ticket",
         description=f"{user.mention} opened a ticket. Staff: respond here to talk to the user.",
         color=discord.Color.green()
     )
 
-    # thumbnail logic: prefer PFP_URL env, otherwise use local pfp.png upload to obtain URL
+    # Thumbnail logic: prefer PFP_URL env (hosted link), otherwise local pfp.png (upload to get URL)
     pfp_url = os.getenv("PFP_URL")
     try:
         if pfp_url:
@@ -126,7 +122,7 @@ async def handle_open_ticket(interaction: discord.Interaction, category_id: int 
     except Exception:
         await new_ch.send(embed=server_intro)
 
-    # DM user
+    # DM the user: start embed + question
     try:
         dm = await user.create_dm()
         await dm.send(embed=dm_start_embed())
@@ -137,18 +133,17 @@ async def handle_open_ticket(interaction: discord.Interaction, category_id: int 
         open_tickets[new_ch.id] = {"user_id": user.id, "last_user_message": None, "inactivity_task": None}
         return
 
-    # register and start inactivity monitor
     task = asyncio.create_task(inactivity_monitor(new_ch.id))
     open_tickets[new_ch.id] = {"user_id": user.id, "last_user_message": None, "inactivity_task": task}
     await interaction.followup.send(f"Ticket created: {new_ch.mention}", ephemeral=True)
 
-# ---------- FORWARDING (DM <-> server) ----------
+# --- Forwarding: DM -> server (embed) and staff -> DM (embed) ---
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # DM from user -> forward to server channel as embed
+    # DM from user -> forward to server ticket channel as an embed
     if isinstance(message.channel, discord.DMChannel):
         user_id = message.author.id
         ch_id = None
@@ -173,12 +168,11 @@ async def on_message(message: discord.Message):
         embed = discord.Embed(color=discord.Color.blue())
         embed.set_author(name=f"{message.author} • {user_id}", icon_url=(message.author.avatar.url if message.author.avatar else None))
         embed.description = message.content or "\u200b"
-
         files = [await att.to_file() for att in message.attachments]
         await ticket_ch.send(content=f"<@{user_id}>", embed=embed, files=files)
         return
 
-    # Server ticket -> forward staff messages to user's DM as embed
+    # Server ticket channel -> staff messages forwarded to user's DM as embed (append "videos are ok")
     if message.guild and message.channel.id in open_tickets:
         author = message.author
         meta = open_tickets[message.channel.id]
@@ -198,7 +192,7 @@ async def on_message(message: discord.Message):
                 await message.channel.send("Couldn't DM the user. They may have DMs closed.")
     await bot.process_commands(message)
 
-# ---------- INACTIVITY MONITOR ----------
+# --- Inactivity monitor ---
 async def inactivity_monitor(channel_id: int):
     def get_meta():
         return open_tickets.get(channel_id)
@@ -231,7 +225,7 @@ async def inactivity_monitor(channel_id: int):
     except Exception:
         return
 
-# ---------- CLOSE HELPER ----------
+# --- Close helper ---
 async def close_ticket_channel(channel: discord.TextChannel | None, reason: str = "Closed"):
     if not channel:
         return
@@ -256,7 +250,7 @@ async def close_ticket_channel(channel: discord.TextChannel | None, reason: str 
     except Exception:
         pass
 
-# ---------- CREATE_TICKET COMMAND (logo + button under image) ----------
+# --- create_ticket command: posts logo with Open Ticket button under it and edits message to include embed ---
 @tree.command(name="create_ticket", description="Post the ticket menu in a channel", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(channel="Channel to post the ticket menu in", category="Optional category to place ticket channels under")
 @app_commands.checks.has_permissions(administrator=True)
@@ -267,7 +261,6 @@ async def create_ticket(interaction: discord.Interaction, channel: discord.TextC
     pfp_path = "pfp.png"
     try:
         if os.path.isfile(pfp_path):
-            # send the image with the button attached, then edit to add embed (so button sits under the image)
             sent = await channel.send(file=discord.File(pfp_path), view=view)
             if sent.attachments:
                 embed.set_thumbnail(url=sent.attachments[-1].url)
@@ -289,7 +282,7 @@ async def create_ticket_error(interaction: discord.Interaction, error):
     else:
         await interaction.response.send_message("An error occurred.", ephemeral=True)
 
-# ---------- CLOSE-TICKET COMMAND ----------
+# --- close-ticket command ---
 @tree.command(name="close-ticket", description="Close the ticket you are in (staff only)", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(reason="Reason for closing the ticket (optional)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -309,7 +302,6 @@ async def close_ticket_error(interaction: discord.Interaction, error):
     else:
         await interaction.response.send_message("An error occurred while trying to close the ticket.", ephemeral=True)
 
-# ---------- READY ----------
 @bot.event
 async def on_ready():
     await tree.sync(guild=discord.Object(id=GUILD_ID))
