@@ -25,23 +25,15 @@ open_tickets: dict[int, dict] = {}  # channel_id -> {"user_id": int, "last_user_
 
 # ---------- Embeds ----------
 def menu_embed() -> discord.Embed:
-    e = discord.Embed(title="UGT Tickets", color=0x2F6FFF)  # blue border
-    # small subtitle under title
-    e.add_field(name="Ultimate Gorilla Tag", value="\u200b", inline=False)
-    # main paragraph block (match spacing)
-    e.add_field(
-        name="\u200b",
-        value=(
-            "A ticket gives you direct access to the staff team for reports and support.\n"
-            "Anything related to the game or the server, we can help with. Open one and\n"
-            "a staff member will be with you shortly."
-        ),
-        inline=False
+    # Title + single description to control spacing and avoid field coloring issues
+    desc = (
+        "Ultimate Gorilla Tag\n\n"
+        "A ticket gives you direct access to the staff team for reports and support.\n"
+        "Anything related to the game or the server, we can help with. Open one and\n"
+        "a staff member will be with you shortly.\n\n"
+        "Please read the Terms of Service before opening a ticket."
     )
-    # spacer to make rectangular appearance
-    e.add_field(name="\u200b", value="\u200b", inline=False)
-    e.set_footer(text="Please read the Terms of Service before opening a ticket.")
-    return e
+    return discord.Embed(title="UGT Tickets", description=desc, color=0x2F6FFF)  # blue border
 
 def dm_start_embed() -> discord.Embed:
     return discord.Embed(
@@ -112,13 +104,14 @@ async def handle_open_ticket(interaction: discord.Interaction, category_id: int 
         color=discord.Color.green()
     )
 
-    # thumbnail: prefer PFP_URL, otherwise upload local pfp.png to get an attachment URL
+    # Use hosted PFP_URL so embed+button can be sent in the same message (better alignment)
     pfp_url = os.getenv("PFP_URL")
     try:
         if pfp_url:
             server_intro.set_thumbnail(url=pfp_url)
             await new_ch.send(embed=server_intro)
         else:
+            # fallback: attempt to use local pfp.png by uploading and using attachment URL
             pfp_path = "pfp.png"
             if os.path.isfile(pfp_path):
                 sent = await new_ch.send(file=discord.File(pfp_path))
@@ -129,7 +122,7 @@ async def handle_open_ticket(interaction: discord.Interaction, category_id: int 
     except Exception:
         await new_ch.send(embed=server_intro)
 
-    # DM user
+    # DM the user: start + question
     try:
         dm = await user.create_dm()
         await dm.send(embed=dm_start_embed())
@@ -144,13 +137,13 @@ async def handle_open_ticket(interaction: discord.Interaction, category_id: int 
     open_tickets[new_ch.id] = {"user_id": user.id, "last_user_message": None, "inactivity_task": task}
     await interaction.followup.send(f"Ticket created: {new_ch.mention}", ephemeral=True)
 
-# ---------- Forwarding ----------
+# ---------- Forwarding (DM <-> Server) ----------
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # DM -> server embed
+    # DM from user -> forward to server ticket channel as embed
     if isinstance(message.channel, discord.DMChannel):
         user_id = message.author.id
         ch_id = None
@@ -173,13 +166,14 @@ async def on_message(message: discord.Message):
             return
 
         embed = discord.Embed(color=discord.Color.blue())
-        embed.set_author(name=f"{message.author} • {user_id}", icon_url=(message.author.avatar.url if message.author.avatar else None))
+        avatar_url = getattr(message.author.display_avatar, "url", None)
+        embed.set_author(name=f"{message.author} • {user_id}", icon_url=avatar_url)
         embed.description = message.content or "\u200b"
         files = [await att.to_file() for att in message.attachments]
         await ticket_ch.send(content=f"<@{user_id}>", embed=embed, files=files)
         return
 
-    # server -> user (staff)
+    # Server ticket -> staff message forwarded to the user's DM as embed
     if message.guild and message.channel.id in open_tickets:
         author = message.author
         meta = open_tickets[message.channel.id]
@@ -190,7 +184,8 @@ async def on_message(message: discord.Message):
                 user = await bot.fetch_user(user_id)
                 dm = await user.create_dm()
                 embed = discord.Embed(color=discord.Color.green())
-                embed.set_author(name=f"Staff Member • {author.display_name}", icon_url=(author.avatar.url if author.avatar else None))
+                avatar_url = getattr(author.display_avatar, "url", None)
+                embed.set_author(name=f"Staff Member • {author.display_name}", icon_url=avatar_url)
                 embed.description = message.content or "\u200b"
                 embed.set_footer(text="videos are ok")
                 files = [await att.to_file() for att in message.attachments]
@@ -199,7 +194,7 @@ async def on_message(message: discord.Message):
                 await message.channel.send("Couldn't DM the user. They may have DMs closed.")
     await bot.process_commands(message)
 
-# ---------- Inactivity ----------
+# ---------- Inactivity monitor ----------
 async def inactivity_monitor(channel_id: int):
     def get_meta():
         return open_tickets.get(channel_id)
@@ -257,7 +252,7 @@ async def close_ticket_channel(channel: discord.TextChannel | None, reason: str 
     except Exception:
         pass
 
-# ---------- create_ticket command ----------
+# ---------- create_ticket command (embed + view in same message using PFP_URL) ----------
 @tree.command(name="create_ticket", description="Post the ticket menu in a channel", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(channel="Channel to post the ticket menu in", category="Optional category to place ticket channels under")
 @app_commands.checks.has_permissions(administrator=True)
@@ -265,22 +260,17 @@ async def create_ticket(interaction: discord.Interaction, channel: discord.TextC
     await interaction.response.defer(ephemeral=True)
     view = TicketMenuView(category.id if category else None)
     embed = menu_embed()
-    pfp_path = "pfp.png"
+
+    # prefer hosted image (PFP_URL) so embed and view are sent in the same message (best visual match)
+    pfp_url = os.getenv("PFP_URL")
+    if pfp_url:
+        embed.set_thumbnail(url=pfp_url)
+
     try:
-        # if local file exists, send it with view (button under image) then edit to add embed thumbnail
-        if os.path.isfile(pfp_path):
-            sent = await channel.send(file=discord.File(pfp_path), view=view)
-            if sent.attachments:
-                embed.set_thumbnail(url=sent.attachments[-1].url)
-            await sent.edit(embed=embed)
-        else:
-            pfp_url = os.getenv("PFP_URL")
-            if pfp_url:
-                embed.set_thumbnail(url=pfp_url)
-            await channel.send(embed=embed, view=view)
+        await channel.send(embed=embed, view=view)
         await interaction.followup.send(f"Ticket menu posted in {channel.mention}.", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send("Failed to post menu. Check bot permissions and that pfp.png or PFP_URL exists.", ephemeral=True)
+        await interaction.followup.send("Failed to post menu. Check bot permissions and that PFP_URL is set.", ephemeral=True)
         print("create_ticket error:", e)
 
 @create_ticket.error
