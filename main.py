@@ -7,7 +7,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 load_dotenv()
 
-GUILD_ID = 1194779812158525552
+GUILD_ID = 1492369331693027408
 STAFF_ROLE_IDS = [1462534977035174191, 1482419022946369568, 129367847490053738384, 1411128656658436116]
 
 intents = discord.Intents.default()
