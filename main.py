@@ -25,28 +25,16 @@ open_tickets: dict[int, dict] = {}  # channel_id -> {"user_id": int, "last_user_
 
 # ---------------- Embeds ----------------
 def menu_embed() -> discord.Embed:
-    # Top title in the card
-    title = "UGT Tickets"
-
-    # Small subtitle + main body
-    desc = (
-        "Comp Ultimate Gorilla Tag\n\n"
-        "A ticket gives you direct access to the staff team for reports and support. "
-        "Anything related to the game or the server, we can help with. Open one and a "
-        "staff member will be with you shortly."
-    )
-
     embed = discord.Embed(
-        title=title,
-        description=desc,
-        color=0x2F6FFF  # adjust if you want a different accent color
+        title="🎫 UGT Support Tickets",
+        description=(
+            "Click a button below to open a ticket.\n"
+            "Please only open one ticket per issue."
+        ),
+        color=0xF1C40F  # Gold like the screenshot
     )
-
-    # Optional: small footer hint
-    embed.set_footer(text="Use the button on the right to open a ticket.")
 
     return embed
-
 
 def dm_start_embed() -> discord.Embed:
     return discord.Embed(
@@ -90,11 +78,45 @@ class TicketMenuView(discord.ui.View):
         super().__init__(timeout=None)
         self.category_id = category_id
 
-    @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.primary, custom_id="ticket_open")
-    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="Support",
+        emoji="🎫",
+        style=discord.ButtonStyle.primary,
+        custom_id="ticket_support"
+    )
+    async def support(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await handle_open_ticket(interaction, self.category_id)
 
+    @discord.ui.button(
+        label="Report / Dispute",
+        emoji="⚠️",
+        style=discord.ButtonStyle.primary,
+        custom_id="ticket_report"
+    )
+    async def report(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await handle_open_ticket(interaction, self.category_id)
+
+    @discord.ui.button(
+        label="Appeal",
+        emoji="📩",
+        style=discord.ButtonStyle.primary,
+        custom_id="ticket_appeal"
+    )
+    async def appeal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await handle_open_ticket(interaction, self.category_id)
+
+    @discord.ui.button(
+        label="Partnership",
+        emoji="🤝",
+        style=discord.ButtonStyle.primary,
+        custom_id="ticket_partner"
+    )
+    async def partnership(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await handle_open_ticket(interaction, self.category_id)
 # ---------------- Ticket creation ----------------
 async def handle_open_ticket(interaction: discord.Interaction, category_id: int | None):
     global ticket_counter
